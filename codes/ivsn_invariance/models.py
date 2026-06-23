@@ -1,0 +1,247 @@
+"""Models for IVSN invariance experiments."""
+
+import torch.nn.functional as F
+from gist import Gist
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from typing import Dict, List, Tuple, Optional
+from collections import OrderedDict
+from pathlib import Path
+from copy import deepcopy
+from torchvision import models, transforms
+import torch.nn as nn
+import numpy as np
+import torch
+from . import runtime
+from .runtime import DEFAULT_GIST_CHECKPOINTS, DEFAULT_GIST_CONFIG, IMAGE_SIZE, ORACLE_WINDOW
+
+
+class PlainVGGFeatureExtractor(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        weights = models.VGG16_Weights.IMAGENET1K_V1
+        vgg = models.vgg16(weights=weights)
+        self.features = nn.Sequential(*list(vgg.features.children())[:30])
+        for p in self.parameters():
+            p.requires_grad = False
+        self.eval()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.features(x)
+
+
+class VGGGistPretrainedFeatureExtractor(nn.Module):
+    """
+    Older VGG+Gist model:
+    gist -> fusion(25->128) -> VGG tail from layer 10 onward
+    """
+
+    def __init__(self, gist_config: dict):
+        super().__init__()
+        self.gist = Gist(**gist_config)
+        self.fusion = nn.Sequential(nn.Conv2d(self.gist.out_channels, 128, kernel_size=1, stride=1), nn.ReLU())
+        vgg = models.vgg16(weights='DEFAULT')
+        self.features = nn.Sequential(*list(vgg.features.children())[10:])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.gist(x)
+        x = self.fusion(x)
+        x = self.features(x)
+        return x
+
+
+class VGGGistImageNet64FeatureExtractor(nn.Module):
+    """
+    New 64-trained VGG+Gist model from colleague example:
+    gist -> fusion(25->64) -> VGG layers [5:9] + [10:]
+    """
+
+    def __init__(self, gist_config: dict):
+        super().__init__()
+        self.gist = Gist(**gist_config)
+        vgg = models.vgg16(weights='DEFAULT')
+        self.fusion = nn.Sequential(nn.Conv2d(self.gist.out_channels, 64, kernel_size=1, stride=1), nn.ReLU())
+        self.features = nn.Sequential(*list(vgg.features.children())[5:9], *list(vgg.features.children())[10:])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.gist(x)
+        x = self.fusion(x)
+        x = self.features(x)
+        return x
+
+
+class ConvGistFeatureExtractor(nn.Module):
+
+    def __init__(self, gist_config: dict, conv_bias: bool=True):
+        super().__init__()
+        out_channels_base = 128
+        self.gist = Gist(**gist_config)
+        self.features = nn.Sequential(OrderedDict([('block1_conv', nn.Conv2d(self.gist.out_channels, out_channels_base, kernel_size=5, stride=2, padding=2, bias=conv_bias)), ('block1_relu', nn.ReLU()), ('block1_norm', nn.BatchNorm2d(out_channels_base)), ('block2_conv', nn.Conv2d(out_channels_base, out_channels_base * 2, kernel_size=3, stride=2, padding=1, bias=conv_bias)), ('block2_relu', nn.ReLU()), ('block2_norm', nn.BatchNorm2d(out_channels_base * 2)), ('block3_conv', nn.Conv2d(out_channels_base * 2, out_channels_base * 4, kernel_size=3, stride=2, padding=1, bias=conv_bias)), ('block3_relu', nn.ReLU()), ('block3_norm', nn.BatchNorm2d(out_channels_base * 4)), ('block4_conv', nn.Conv2d(out_channels_base * 4, out_channels_base * 4, kernel_size=3, stride=1, padding=1, bias=conv_bias)), ('block4_relu', nn.ReLU()), ('block4_norm', nn.BatchNorm2d(out_channels_base * 4))]))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.gist(x)
+        x = self.features(x)
+        return x
+
+
+class ConvGistMLPFeatureExtractor(nn.Module):
+
+    def __init__(self, gist_config: dict, conv_bias: bool=True):
+        super().__init__()
+        out_channels_base = 128
+        self.gist = Gist(**gist_config)
+        self.features = nn.Sequential(OrderedDict([('block1_conv', nn.Conv2d(self.gist.out_channels, out_channels_base, kernel_size=5, stride=2, padding=2, bias=conv_bias)), ('block1_relu', nn.ReLU()), ('block1_norm', nn.BatchNorm2d(out_channels_base)), ('block2_conv', nn.Conv2d(out_channels_base, out_channels_base * 2, kernel_size=3, stride=2, padding=1, bias=conv_bias)), ('block2_relu', nn.ReLU()), ('block2_norm', nn.BatchNorm2d(out_channels_base * 2)), ('block3_conv', nn.Conv2d(out_channels_base * 2, out_channels_base * 4, kernel_size=3, stride=2, padding=1, bias=conv_bias)), ('block3_relu', nn.ReLU()), ('block3_norm', nn.BatchNorm2d(out_channels_base * 4)), ('block4_conv', nn.Conv2d(out_channels_base * 4, out_channels_base * 4, kernel_size=3, stride=1, padding=1, bias=conv_bias)), ('block4_relu', nn.ReLU()), ('block4_norm', nn.BatchNorm2d(out_channels_base * 4))]))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.gist(x)
+        x = self.features(x)
+        return x
+
+
+def load_feature_extractor_weights(feature_extractor: nn.Module, checkpoint_path: Path, allowed_prefixes: Tuple[str, ...], device: torch.device):
+    state_dict = torch.load(checkpoint_path, map_location=device)
+    if isinstance(state_dict, dict) and 'state_dict' in state_dict:
+        state_dict = state_dict['state_dict']
+    model_state = feature_extractor.state_dict()
+    cleaned = {}
+    skipped = []
+    for k, v in state_dict.items():
+        nk = k.replace('module.', '')
+        if not nk.startswith(allowed_prefixes):
+            continue
+        if nk not in model_state:
+            skipped.append((nk, 'missing_in_model'))
+            continue
+        if model_state[nk].shape != v.shape:
+            skipped.append((nk, f'shape_mismatch ckpt={tuple(v.shape)} model={tuple(model_state[nk].shape)}'))
+            continue
+        cleaned[nk] = v
+    missing, unexpected = feature_extractor.load_state_dict(cleaned, strict=False)
+    print(f'Loaded checkpoint from: {checkpoint_path}')
+    if missing:
+        print('Missing keys:', missing)
+    if unexpected:
+        print('Unexpected keys:', unexpected)
+    if skipped:
+        print('Skipped keys:')
+        for name, reason in skipped:
+            print(f'  {name}: {reason}')
+
+
+class BaseAttentionModel:
+
+    def position_scores(self, cue_img: Image.Image, search_img: Image.Image, positions: List[Tuple[int, int]]):
+        raise NotImplementedError
+
+
+class VGGAttentionModel(BaseAttentionModel):
+
+    def __init__(self, device: str='cpu'):
+        self.device = torch.device(device)
+        weights = models.VGG16_Weights.IMAGENET1K_V1
+        vgg = models.vgg16(weights=weights).features.eval().to(self.device)
+        self.backbone = vgg[:30].eval().to(self.device)
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+        t = weights.transforms()
+        self.transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize(mean=t.mean, std=t.std)])
+
+    def preprocess(self, img: Image.Image) -> torch.Tensor:
+        return self.transform(img).unsqueeze(0).to(self.device)
+
+    @torch.no_grad()
+    def feature_map(self, img: Image.Image) -> torch.Tensor:
+        return self.backbone(self.preprocess(img))
+
+    @torch.no_grad()
+    def position_scores(self, cue_img: Image.Image, search_img: Image.Image, positions: List[Tuple[int, int]]):
+        cue_feat = self.feature_map(cue_img)
+        search_feat = self.feature_map(search_img)
+        cue_vec = cue_feat.mean(dim=(2, 3), keepdim=True)
+        attn = (search_feat * cue_vec).sum(dim=1, keepdim=True)
+        attn = F.relu(attn)
+        attn_up = F.interpolate(attn, size=(IMAGE_SIZE, IMAGE_SIZE), mode='bilinear', align_corners=False)
+        attn_np = attn_up.squeeze().detach().cpu().numpy()
+        scores = []
+        half = ORACLE_WINDOW // 2
+        for x, y in positions:
+            x1 = max(0, x - half)
+            x2 = min(IMAGE_SIZE, x + half)
+            y1 = max(0, y - half)
+            y2 = min(IMAGE_SIZE, y + half)
+            scores.append(float(attn_np[y1:y2, x1:x2].mean()))
+        return (attn_np, np.asarray(scores, dtype=np.float32))
+
+
+class GistAttentionModel(BaseAttentionModel):
+
+    def __init__(self, feature_extractor: nn.Module, device: str='cpu', grayscale_input: bool=True, image_size: int=224):
+        self.device = torch.device(device)
+        self.backbone = feature_extractor.eval().to(self.device)
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+        tfs = [transforms.Resize((image_size, image_size))]
+        if grayscale_input:
+            tfs.append(transforms.Grayscale(num_output_channels=1))
+        tfs.append(transforms.ToTensor())
+        self.transform = transforms.Compose(tfs)
+
+    def preprocess(self, img: Image.Image) -> torch.Tensor:
+        return self.transform(img).unsqueeze(0).to(self.device)
+
+    @torch.no_grad()
+    def feature_map(self, img: Image.Image) -> torch.Tensor:
+        return self.backbone(self.preprocess(img))
+
+    @torch.no_grad()
+    def position_scores(self, cue_img: Image.Image, search_img: Image.Image, positions: List[Tuple[int, int]]):
+        cue_feat = self.feature_map(cue_img)
+        search_feat = self.feature_map(search_img)
+        cue_vec = cue_feat.mean(dim=(2, 3), keepdim=True)
+        attn = (search_feat * cue_vec).sum(dim=1, keepdim=True)
+        attn = F.relu(attn)
+        attn_up = F.interpolate(attn, size=(IMAGE_SIZE, IMAGE_SIZE), mode='bilinear', align_corners=False)
+        attn_np = attn_up.squeeze().detach().cpu().numpy()
+        scores = []
+        half = ORACLE_WINDOW // 2
+        for x, y in positions:
+            x1 = max(0, x - half)
+            x2 = min(IMAGE_SIZE, x + half)
+            y1 = max(0, y - half)
+            y2 = min(IMAGE_SIZE, y + half)
+            scores.append(float(attn_np[y1:y2, x1:x2].mean()))
+        return (attn_np, np.asarray(scores, dtype=np.float32))
+
+
+def get_gist_config(args) -> dict:
+    gist_config = deepcopy(DEFAULT_GIST_CONFIG)
+    if args.model_kind == 'vgg_gist_imagenet64' and args.gist_image_size == 64:
+        gist_config['stride'] = 1
+    return gist_config
+
+
+def build_attention_model(args) -> BaseAttentionModel:
+    if args.model_kind == 'vgg':
+        return VGGAttentionModel(device=args.device)
+    gist_config = get_gist_config(args)
+    if args.model_kind == 'vgg_gist_pretrained':
+        feature_extractor = VGGGistPretrainedFeatureExtractor(gist_config)
+        checkpoint = Path(args.vgg_gist_checkpoint or DEFAULT_GIST_CHECKPOINTS['vgg_gist_pretrained'])
+        load_feature_extractor_weights(feature_extractor, checkpoint, allowed_prefixes=('gist.', 'fusion.', 'features.'), device=torch.device(args.device))
+        return GistAttentionModel(feature_extractor, device=args.device, grayscale_input=True, image_size=args.gist_image_size)
+    if args.model_kind == 'vgg_gist_imagenet64':
+        feature_extractor = VGGGistImageNet64FeatureExtractor(gist_config)
+        checkpoint = Path(args.vgg_gist_imagenet64_checkpoint or DEFAULT_GIST_CHECKPOINTS['vgg_gist_imagenet64'])
+        load_feature_extractor_weights(feature_extractor, checkpoint, allowed_prefixes=('gist.', 'fusion.', 'features.'), device=torch.device(args.device))
+        return GistAttentionModel(feature_extractor, device=args.device, grayscale_input=True, image_size=args.gist_image_size)
+    if args.model_kind == 'conv_gist':
+        feature_extractor = ConvGistFeatureExtractor(gist_config)
+        checkpoint = Path(args.conv_gist_checkpoint or DEFAULT_GIST_CHECKPOINTS['conv_gist'])
+        load_feature_extractor_weights(feature_extractor, checkpoint, allowed_prefixes=('gist.', 'features.'), device=torch.device(args.device))
+        return GistAttentionModel(feature_extractor, device=args.device, grayscale_input=True, image_size=args.gist_image_size)
+    if args.model_kind == 'conv_gist_mlp':
+        feature_extractor = ConvGistMLPFeatureExtractor(gist_config)
+        checkpoint = Path(args.conv_gist_mlp_checkpoint or DEFAULT_GIST_CHECKPOINTS['conv_gist_mlp'])
+        load_feature_extractor_weights(feature_extractor, checkpoint, allowed_prefixes=('gist.', 'features.'), device=torch.device(args.device))
+        return GistAttentionModel(feature_extractor, device=args.device, grayscale_input=True, image_size=args.gist_image_size)
+    raise ValueError(f'Unsupported model_kind: {args.model_kind}')
