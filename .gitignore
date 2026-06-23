@@ -11,6 +11,9 @@ venv/
 # Model checkpoints are distributed separately
 *.pth
 
+# Generated result tables
+*.csv
+
 # Generated experiment outputs
 codes/outputs/
 codes/results/

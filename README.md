@@ -62,7 +62,7 @@ IVSN/
     │   ├── visualization.py       # attention and example figures
     │   └── reporting.py           # summaries, CSV files, and plots
     ├── model_weights/             # add local checkpoints here (not in Git)
-    └── run_*.sh
+    └── scripts/                   # SLURM run and test scripts
 ```
 
 ## Model weights (not included)
@@ -137,8 +137,10 @@ python -m ivsn_invariance --help
 ```
 
 Available model kinds are `vgg`, `vgg_gist_pretrained`, `conv_gist`,
-`conv_gist_mlp`, and `vgg_gist_imagenet64`. Existing `run_*.sh` scripts provide
-complete examples for these variants.
+`conv_gist_mlp`, and `vgg_gist_imagenet64`. The scripts in `codes/scripts/`
+provide complete SLURM examples for these variants. They determine the `codes/`
+directory automatically and can therefore be submitted from any directory, for
+example with `sbatch codes/scripts/run_vgg.sh`.
 
 ## Outputs
 

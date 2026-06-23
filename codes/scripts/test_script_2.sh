@@ -8,6 +8,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CODE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "${CODE_DIR}"
+
 mkdir -p logs
 source venv/bin/activate
 
