@@ -8,12 +8,12 @@ import numpy as np
 from . import runtime
 from .data import load_rgba
 from .domain import TransformSpec
-from .runtime import IMAGE_SIZE, OBJ_SIZE
+from .runtime import IMAGE_SIZE
 
 
 def affine_from_spec(spec: TransformSpec) -> Tuple[float, float, float, float, float, float]:
-    cx = (OBJ_SIZE - 1) / 2.0
-    cy = (OBJ_SIZE - 1) / 2.0
+    cx = (runtime.OBJ_SIZE - 1) / 2.0
+    cy = (runtime.OBJ_SIZE - 1) / 2.0
     sx = max(1e-06, spec.scale)
     sy = max(1e-06, spec.scale)
     kx = math.tan(math.radians(spec.skew_x_deg))
@@ -99,7 +99,7 @@ def apply_degradations_rgba(img: Image.Image, spec: TransformSpec) -> Image.Imag
 
 def apply_transform_rgba(img: Image.Image, spec: TransformSpec, args, apply_smoothing: bool) -> Image.Image:
     coeffs = affine_from_spec(spec)
-    out = img.transform((OBJ_SIZE, OBJ_SIZE), Image.AFFINE, coeffs, resample=Image.BICUBIC, fillcolor=(0, 0, 0, 0))
+    out = img.transform((runtime.OBJ_SIZE, runtime.OBJ_SIZE), Image.AFFINE, coeffs, resample=Image.BICUBIC, fillcolor=(0, 0, 0, 0))
     out = apply_degradations_rgba(out, spec)
     if apply_smoothing:
         out = apply_boundary_mask_rgba(out, args)
@@ -119,10 +119,10 @@ def render_cue(cue_path: Path, args, transform_spec: Optional[TransformSpec]=Non
     if transform_spec is None:
         transform_spec = TransformSpec()
     cue_rgba_t = apply_transform_rgba(cue_rgba_orig, transform_spec, args, apply_smoothing=args.smooth_cue)
-    cue_orig = Image.new('RGB', (OBJ_SIZE, OBJ_SIZE), (128, 128, 128))
-    cue_orig = alpha_paste_rgb(cue_orig, cue_rgba_orig, (OBJ_SIZE // 2, OBJ_SIZE // 2))
-    cue_t = Image.new('RGB', (OBJ_SIZE, OBJ_SIZE), (128, 128, 128))
-    cue_t = alpha_paste_rgb(cue_t, cue_rgba_t, (OBJ_SIZE // 2, OBJ_SIZE // 2))
+    cue_orig = Image.new('RGB', (runtime.OBJ_SIZE, runtime.OBJ_SIZE), (128, 128, 128))
+    cue_orig = alpha_paste_rgb(cue_orig, cue_rgba_orig, (runtime.OBJ_SIZE // 2, runtime.OBJ_SIZE // 2))
+    cue_t = Image.new('RGB', (runtime.OBJ_SIZE, runtime.OBJ_SIZE), (128, 128, 128))
+    cue_t = alpha_paste_rgb(cue_t, cue_rgba_t, (runtime.OBJ_SIZE // 2, runtime.OBJ_SIZE // 2))
     return (cue_orig, cue_t)
 
 
