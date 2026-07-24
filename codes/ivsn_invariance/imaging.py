@@ -115,7 +115,7 @@ def alpha_paste_rgb(canvas_rgb: Image.Image, obj_rgba: Image.Image, center_xy: T
 
 
 def render_cue(cue_path: Path, args, transform_spec: Optional[TransformSpec]=None) -> Tuple[Image.Image, Image.Image]:
-    cue_rgba_orig = load_rgba(cue_path)
+    cue_rgba_orig = load_rgba(cue_path).resize((runtime.OBJ_SIZE, runtime.OBJ_SIZE), Image.BICUBIC)
     if transform_spec is None:
         transform_spec = TransformSpec()
     cue_rgba_t = apply_transform_rgba(cue_rgba_orig, transform_spec, args, apply_smoothing=args.smooth_cue)
@@ -128,10 +128,10 @@ def render_cue(cue_path: Path, args, transform_spec: Optional[TransformSpec]=Non
 
 def render_search_display(target_path: Path, distractor_paths: List[Path], target_position: int, target_transform: TransformSpec, distractor_transforms: List[TransformSpec], args) -> Image.Image:
     canvas = Image.new('RGB', (IMAGE_SIZE, IMAGE_SIZE), (128, 128, 128))
-    target_rgba = apply_transform_rgba(load_rgba(target_path), target_transform, args, apply_smoothing=args.smooth_target)
+    target_rgba = apply_transform_rgba(load_rgba(target_path).resize((runtime.OBJ_SIZE, runtime.OBJ_SIZE), Image.BICUBIC), target_transform, args, apply_smoothing=args.smooth_target)
     canvas = alpha_paste_rgb(canvas, target_rgba, runtime.POSITIONS[target_position])
     remaining_positions = [i for i in range(runtime.N_POSITIONS) if i != target_position]
     for dpath, pidx, dspec in zip(distractor_paths, remaining_positions, distractor_transforms):
-        dist_rgba = apply_transform_rgba(load_rgba(dpath), dspec, args, apply_smoothing=args.smooth_distractors)
+        dist_rgba = apply_transform_rgba(load_rgba(dpath).resize((runtime.OBJ_SIZE, runtime.OBJ_SIZE), Image.BICUBIC), dspec, args, apply_smoothing=args.smooth_distractors)
         canvas = alpha_paste_rgb(canvas, dist_rgba, runtime.POSITIONS[pidx])
     return canvas
